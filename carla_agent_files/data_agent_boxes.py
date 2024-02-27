@@ -9,13 +9,13 @@ import torch
 import numpy as np
 from rdp import rdp
 
-from carla_agent_files.autopilot import AutoPilot
-from scenario_logger import ScenarioLogger
+from driving_agents.king.plant.carla_agent_files.autopilot import AutoPilot
+from driving_agents.king.plant.carla_agent_files.scenario_logger import ScenarioLogger
 import carla
 
-from carla_agent_files.agent_utils.coordinate_utils import normalize_angle
+from driving_agents.king.plant.carla_agent_files.agent_utils.coordinate_utils import normalize_angle
 
-SHUFFLE_WEATHER = int(os.environ.get('SHUFFLE_WEATHER'))
+SHUFFLE_WEATHER = 0#int(os.environ.get('SHUFFLE_WEATHER'))
 
 WEATHERS = {
 		'Clear': carla.WeatherParameters.ClearNoon,
@@ -443,7 +443,7 @@ class DataAgent(AutoPilot):
             }
             results.append(result)
 
-
+        os.environ['DATAGEN'] = "0"
         if int(os.environ.get('DATAGEN')):
             # -----------------------------------------------------------
             # Traffic lights

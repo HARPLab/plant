@@ -12,11 +12,11 @@ from PIL import Image
 from pathlib import Path
 from collections import deque, defaultdict
 
-from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
-from leaderboard.autoagents import autonomous_agent, autonomous_agent_local
-from carla_agent_files.nav_planner import PIDController, interpolate_trajectory
-from carla_agent_files.nav_planner import RoutePlanner_new as RoutePlanner
-from carla_agent_files.agent_utils.coordinate_utils import preprocess_compass, inverse_conversion_2d
+#from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
+from driving_agents.king.common import autonomous_agent
+from driving_agents.king.plant.carla_agent_files.nav_planner import PIDController, interpolate_trajectory
+from driving_agents.king.plant.carla_agent_files.nav_planner import RoutePlanner_new as RoutePlanner
+from driving_agents.king.plant.carla_agent_files.agent_utils.coordinate_utils import preprocess_compass, inverse_conversion_2d
 
 DATA_SAVE_PATH = os.environ.get('DATA_SAVE_PATH', None)
 LOG_SAVE_PATH = os.environ.get('LOG_SAVE_PATH', None)
@@ -25,16 +25,16 @@ def get_entry_point():
     return 'AutoPilot'
 
 
-class AutoPilot(autonomous_agent_local.AutonomousAgent):
+class AutoPilot(autonomous_agent.AutonomousAgent):
     def setup(self, path_to_conf_file, route_index=None, cfg=None, exec_or_inter=None):
-        self.track = autonomous_agent.Track.MAP
+        self.track = 'MAP'
         self.config_path = path_to_conf_file
         self.step = -1
         self.initialized = False
         self.save_path = None
         self.route_index = route_index
 
-        self.datagen = int(os.environ.get('DATAGEN', 0)) == 1
+        #self.datagen = int(os.environ.get('DATAGEN', 0)) == 1
 
         self.render_bev = False # TODO
         self.exec_or_inter = exec_or_inter
@@ -48,7 +48,7 @@ class AutoPilot(autonomous_agent_local.AutonomousAgent):
         self.vehicle_model = EgoModel(dt=(1.0 / self.frame_rate))
 
         # Configuration
-        self.visualize = int(os.environ['DEBUG_CHALLENGE'])
+        self.visualize = 0#int(os.environ['DEBUG_CHALLENGE'])
         self.save_freq = self.frame_rate_sim//2
 
         # Controllers
@@ -148,6 +148,7 @@ class AutoPilot(autonomous_agent_local.AutonomousAgent):
 
             (self.save_path / 'measurements').mkdir()
         
+        self.log_path = None
         if LOG_SAVE_PATH is not None:
             self.log_path = Path(os.environ['LOG_SAVE_PATH'])
             self.log_path.mkdir(parents=True, exist_ok=True)
@@ -155,12 +156,13 @@ class AutoPilot(autonomous_agent_local.AutonomousAgent):
 
     def _init(self, hd_map):
         # Near node
-        self.world_map = carla.Map("RouteMap", hd_map[1]['opendrive'])
-        trajectory = [item[0].location for item in self._global_plan_world_coord]
+        self.world_map = carla.Map("RouteMap", hd_map['opendrive'])
+        trajectory = [item[0].location for item in self._global_plan_world_coord_list[0]] # added [0] and _list
         self.dense_route, _ = interpolate_trajectory(self.world_map, trajectory)
+        self._global_plan = self._global_plan_list[0] # added
         
-        print("Sparse Waypoints:", len(self._global_plan))
-        print("Dense Waypoints:", len(self.dense_route))
+        #print("Sparse Waypoints:", len(self._global_plan))
+        #print("Dense Waypoints:", len(self.dense_route))
 
         self._waypoint_planner = RoutePlanner(3.5, 50)
         self._waypoint_planner.set_route(self.dense_route, True)
@@ -175,12 +177,28 @@ class AutoPilot(autonomous_agent_local.AutonomousAgent):
         self._command_planner.set_route(self._global_plan, True)
 
         # Privileged
-        self._vehicle = CarlaDataProvider.get_hero_actor()
+        self._vehicle = hd_map['vehWorld']#CarlaDataProvider.get_hero_actor()
         self._world = self._vehicle.get_world()
+        #self._world = hd_map['vehWorld']
 
         self.keep_ids = None
 
         self.initialized = True
+
+    def reset(self):
+        self.step = -1 # present
+        #self.wall_start = time.time() # absent
+        self.initialized = False # present
+
+        self.ego_model     = EgoModel(dt=(1.0 / self.frame_rate)) #present
+        self.vehicle_model = EgoModel(dt=(1.0 / self.frame_rate)) #present
+
+        #self.steer_buffer = [] #absent
+        self.vehicle_speed_buffer = defaultdict( lambda: {"velocity": [], "throttle": [], "brake": []})
+
+        self.steer = 0.0
+        self.throttle = 0.0
+        self.brake = 0.0
 
     def sensors(self):
         result = [{
@@ -213,9 +231,9 @@ class AutoPilot(autonomous_agent_local.AutonomousAgent):
         return result
 
     def tick(self, input_data):
-        gps = input_data['gps'][1][:2]
-        speed = input_data['speed'][1]['speed']
-        compass = input_data['imu'][1][-1]
+        gps = input_data['gps'][0][0][:2].cpu().numpy()
+        speed = input_data['speed'].item()
+        compass = input_data['imu'].item()
         if (math.isnan(compass) == True): # simulation bug
             compass = 0.0
 
@@ -229,8 +247,8 @@ class AutoPilot(autonomous_agent_local.AutonomousAgent):
         return result
 
     def tick_autopilot(self, input_data):
-        speed = input_data['speed'][1]['speed']
-        compass = preprocess_compass(input_data['imu'][1][-1])
+        speed = input_data['speed'].item()
+        compass = preprocess_compass(input_data['imu'].item())
 
         pos = self._vehicle.get_location()
         gps = np.array([pos.x, pos.y])

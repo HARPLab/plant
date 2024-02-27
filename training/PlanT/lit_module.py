@@ -7,7 +7,7 @@ from torch import nn
 from torch.optim.lr_scheduler import MultiStepLR
 from torchmetrics import Accuracy
 
-from training.PlanT.model import HFLM
+from driving_agents.king.plant.training.PlanT.model import HFLM
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ class LitHFLM(pl.LightningModule):
         self.last_epoch = 0
         self.cfg_train = self.cfg.model.training
         self.model = HFLM(self.cfg.model.network, self.cfg)
+        self.model.to('cuda')
 
         # Loss functions
         self.criterion = nn.CrossEntropyLoss()

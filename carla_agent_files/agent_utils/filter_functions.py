@@ -34,6 +34,8 @@ def bicycle_model_forward(x, dt, steer, throttle, brake):
     next_speed = speed + accel * dt
     next_speed = next_speed * (next_speed > 0.0)  # Fast ReLU
 
+    if(not isinstance(next_speed, np.float64) and next_speed.is_cuda):
+        next_speed = next_speed.cpu().numpy().squeeze()
     next_state_x = np.array([next_locs_0, next_locs_1, next_yaws, next_speed])
 
     return next_state_x

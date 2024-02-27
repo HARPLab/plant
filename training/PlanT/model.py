@@ -178,14 +178,14 @@ class HFLM(nn.Module):
             ), "light_hazard must be provided for wp output"
 
         # create batch of same size as input
-        x_batched = torch.cat(idx, dim=0)
+        x_batched = torch.cat(idx, dim=0).to('cuda')
         input_batch = self.pad_sequence_batch(x_batched)
         input_batch_type = input_batch[:, :, 0]  # car or map
         input_batch_data = input_batch[:, :, 1:]
 
         # create same for output in case of multitask training to use this as ground truth
         if target is not None:
-            y_batched = torch.cat(target, dim=0)
+            y_batched = torch.cat(target, dim=0).to('cuda')
             output_batch = self.pad_sequence_batch(y_batched)
             output_batch_type = output_batch[:, :, 0]  # car or map
             output_batch_data = output_batch[:, :, 1:]
@@ -333,7 +333,11 @@ class HFLM(nn.Module):
         # when training we transform the waypoints to lidar coordinate, so we need to change is back when control
         waypoints[:, 0] += 1.3
 
+
         speed = velocity[0].data.cpu().numpy()
+        # King proxy sim returns velocity as [[vel]] but CARLA sim in PlanT returns as [vel]
+        if (speed.shape == (1,)):
+            speed = speed[0]
 
         desired_speed = np.linalg.norm(waypoints[0] - waypoints[1]) * 2.0
         if is_stuck:

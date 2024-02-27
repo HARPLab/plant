@@ -13,17 +13,17 @@ import carla
 
 from filterpy.kalman import MerweScaledSigmaPoints
 from filterpy.kalman import UnscentedKalmanFilter as UKF
-from carla_agent_files.agent_utils.filter_functions import *
-from carla_agent_files.agent_utils.coordinate_utils import preprocess_compass, inverse_conversion_2d
-from carla_agent_files.agent_utils.explainability_utils import *
+from driving_agents.king.plant.carla_agent_files.agent_utils.filter_functions import *
+from driving_agents.king.plant.carla_agent_files.agent_utils.coordinate_utils import preprocess_compass, inverse_conversion_2d
+from driving_agents.king.plant.carla_agent_files.agent_utils.explainability_utils import *
 
-from carla_agent_files.data_agent_boxes import DataAgent
-from training.PlanT.dataset import generate_batch, split_large_BB
-from training.PlanT.lit_module import LitHFLM
+from driving_agents.king.plant.carla_agent_files.data_agent_boxes import DataAgent
+from driving_agents.king.plant.training.PlanT.dataset import generate_batch, split_large_BB
+from driving_agents.king.plant.training.PlanT.lit_module import LitHFLM
 
-from nav_planner import extrapolate_waypoint_route
-from nav_planner import RoutePlanner_new as RoutePlanner
-from scenario_logger import ScenarioLogger
+from driving_agents.king.plant.carla_agent_files.nav_planner import extrapolate_waypoint_route
+from driving_agents.king.plant.carla_agent_files.nav_planner import RoutePlanner_new as RoutePlanner
+from driving_agents.king.plant.carla_agent_files.scenario_logger import ScenarioLogger
 
 def get_entry_point():
     return 'PlanTAgent'
@@ -32,9 +32,10 @@ SAVE_GIF = os.getenv("SAVE_GIF", 'False').lower() in ('true', '1', 't')
 
 
 class PlanTAgent(DataAgent):
-    def setup(self, path_to_conf_file, route_index=None, cfg=None, exec_or_inter=None):
+    def setup(self, cfg, device=None, path_to_conf_file=None, exec_or_inter=None, route_index=""):
         self.cfg = cfg
         self.exec_or_inter = exec_or_inter
+        self.device = device
 
         # first args than super setup is important!
         args_file = open(os.path.join(path_to_conf_file, 'args.txt'), 'r')
@@ -94,6 +95,8 @@ class PlanTAgent(DataAgent):
             self.net = LitHFLM.load_from_checkpoint(LOAD_CKPT_PATH)
         else:
             raise Exception(f'Unknown model type: {Path(LOAD_CKPT_PATH).suffix}')
+        print(f'Load done!')
+        self.net.to(self.device)
         self.net.eval()
         self.scenario_logger = False
 
@@ -123,10 +126,16 @@ class PlanTAgent(DataAgent):
 
         self.keep_ids = None
 
-        self.control = carla.VehicleControl()
-        self.control.steer = 0.0
-        self.control.throttle = 0.0
-        self.control.brake = 1.0
+        #self.control = carla.VehicleControl()
+        #self.control.steer = 0.0
+        #self.control.throttle = 0.0
+        #self.control.brake = 1.0
+
+        self.control = {
+            "steer":  torch.tensor(0.0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(self.device, dtype=torch.float32),
+            "throttle": torch.tensor(0.0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(self.device, dtype=torch.float32),
+            "brake": torch.tensor(1.0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(self.device, dtype=torch.float32),
+        }
 
         self.initialized = True
 
@@ -155,18 +164,18 @@ class PlanTAgent(DataAgent):
     def tick(self, input_data):
         result = super().tick(input_data)
 
-        pos = self._route_planner.convert_gps_to_carla(input_data['gps'][1][:2])
-        speed = input_data['speed'][1]['speed']
-        compass = preprocess_compass(input_data['imu'][1][-1])
+        pos = self._route_planner.convert_gps_to_carla(input_data['gps'][0][0][:2].cpu().numpy())
+        speed = input_data['speed'].item()
+        compass = preprocess_compass(input_data['imu'].item())
 
         
         if not self.filter_initialized:
             self.ukf.x = np.array([pos[0], pos[1], compass, speed])
             self.filter_initialized = True
 
-        self.ukf.predict(steer=self.control.steer,
-                        throttle=self.control.throttle,
-                        brake=self.control.brake)
+        self.ukf.predict(steer=self.control['steer'],
+                        throttle=self.control['throttle'],
+                        brake=self.control['brake'])
         self.ukf.update(np.array([pos[0], pos[1], compass, speed]))
         filtered_state = self.ukf.x
         self.state_log.append(filtered_state)
@@ -204,9 +213,10 @@ class PlanTAgent(DataAgent):
 
 
     @torch.no_grad()
-    def run_step(self, input_data, timestamp, sensors=None,  keep_ids=None):
+    def run_step(self, input_data, proxy_sim, sensors=None,  keep_ids=None):
         
         self.keep_ids = keep_ids
+            
 
         self.step += 1
         if not self.initialized:
@@ -219,6 +229,7 @@ class PlanTAgent(DataAgent):
                 self.control.brake = 1.0
                 if self.exec_or_inter == 'inter':
                     return [], None
+                self.control = {"steer": 0.0, "throttle": 0.0, "brake": 1.0} # added
                 return self.control
 
         # needed for traffic_light_hazard
@@ -237,7 +248,11 @@ class PlanTAgent(DataAgent):
         
         inital_frames_delay = 40
         if self.step < inital_frames_delay:
-            self.control = carla.VehicleControl(0.0, 0.0, 1.0)
+            self.control = {
+            "steer":  torch.tensor(0.0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(self.device, dtype=torch.float32),
+            "throttle": torch.tensor(0.0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(self.device, dtype=torch.float32),
+            "brake": torch.tensor(1.0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(self.device, dtype=torch.float32),
+            }
             
         return self.control
 
@@ -247,6 +262,8 @@ class PlanTAgent(DataAgent):
         gt_velocity = torch.FloatTensor([input_data['speed']]).unsqueeze(0)
         input_batch = self.get_input_batch(label_raw, input_data)
         x, y, _, tp, light = input_batch
+        tp = tp.to('cuda')
+        light = light.to('cuda')
     
         _, _, pred_wp, attn_map = self.net(x, y, target_point=tp, light_hazard=light)
 
@@ -258,10 +275,16 @@ class PlanTAgent(DataAgent):
         if brake:
             steer *= self.steer_damping
 
-        control = carla.VehicleControl()
-        control.steer = float(steer)
-        control.throttle = float(throttle)
-        control.brake = float(brake)
+        #control = carla.VehicleControl()
+        #control.steer = float(steer)
+        #control.throttle = float(throttle)
+        #control.brake = float(brake)
+
+        control = {
+            "steer":  torch.tensor(steer).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(self.device, dtype=torch.float32),
+            "throttle": torch.tensor(throttle).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(self.device, dtype=torch.float32),
+            "brake": torch.tensor(brake).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(self.device, dtype=torch.float32),
+        }
 
         viz_trigger = ((self.step % 20 == 0) and self.cfg.viz)
         if viz_trigger and self.step > 2:
